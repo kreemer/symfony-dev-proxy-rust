@@ -4,14 +4,12 @@ pub mod config {
     use super::provider::Mapping;
 
     #[derive(Serialize, Deserialize, Debug)]
-    pub struct MyConfig {
+    #[derive(Default)]
+pub struct MyConfig {
         pub mappings: Vec<Mapping>
     }
 
-    impl ::std::default::Default for MyConfig {
-        fn default() -> Self { Self { mappings: vec![] } }
-        
-    }
+    
 }
 
 pub mod provider {
@@ -74,12 +72,12 @@ pub mod http {
 
             let hyper_client = hyper::Client::builder().build::<_, hyper::Body>(https);
             
-            return ReverseProxy::new(hyper_client);
+            ReverseProxy::new(hyper_client)
         };
     }
     
     async fn handle(client_ip: IpAddr, req: Request<Body>) -> Result<Response<Body>, Infallible> {
-        println!("URI {}", req.uri().to_string());
+        println!("URI {}", req.uri());
 
         let config: MyConfig = confy::load("symfony-dev-proxy", None).unwrap_or(MyConfig::default());
 
@@ -107,7 +105,7 @@ pub mod http {
             .body(Body::empty())
             .unwrap();
 
-        return Ok(response)
+        Ok(response)
 
     }
 
@@ -132,7 +130,7 @@ pub mod http {
 
     fn create_pac_file(mappings: Vec<Mapping>) -> String {
         let host_mappings = mappings.iter().map(|m| m.host.clone()).collect::<Vec<String>>();
-        return format!(r###"
+        format!(r###"
 function FindProxyForURL (url, host) {{ 
 let list = {};
 for (let i = 0; i < list.length; i++) {{ 
@@ -141,7 +139,7 @@ if (host == list[i]) {{
 }}
 }}                  
 return 'DIRECT';
-}}"###, serde_json::to_string(&host_mappings).expect("fail"));
+}}"###, serde_json::to_string(&host_mappings).expect("fail"))
 
     }
 
@@ -158,7 +156,7 @@ return 'DIRECT';
             _now: SystemTime
         ) -> Result<rustls::client::ServerCertVerified, rustls::Error>
         {
-            return Ok(ServerCertVerified::assertion());
+            Ok(ServerCertVerified::assertion())
         }
     }
 

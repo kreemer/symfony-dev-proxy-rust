@@ -1,6 +1,6 @@
 use clap::{command, Parser, Subcommand};
 use symfony_dev_proxy::{config::MyConfig, provider::Mapping, http::start_server};
-use confy;
+
 use anyhow::{Result, anyhow};
 
 #[derive(Parser)]
@@ -86,7 +86,7 @@ async fn main() -> Result<()> {
             }
         }
         Some(Commands::List {  }) => {
-            if config.mappings.len() == 0 {
+            if config.mappings.is_empty() {
                 println!("No mapping present");
                 return Ok(());
             }

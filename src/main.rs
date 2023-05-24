@@ -45,7 +45,7 @@ async fn main() -> Result<()> {
                 println!("Starting proxy server with port {}", configured_port);
             }
 
-            start_server(configured_port, config.mappings, cli.verbose).await;
+            start_server(configured_port, cli.verbose).await;
         }
         Some(Commands::Add { host, target }) => {
             if cli.verbose {

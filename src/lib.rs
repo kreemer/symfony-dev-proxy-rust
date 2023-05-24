@@ -1,4 +1,7 @@
 
+#[macro_use]
+extern crate tracing;
+
 pub mod config {
     use serde::{Serialize, Deserialize};
 
@@ -8,6 +11,7 @@ pub mod config {
     pub struct MyConfig {
         pub mappings: Vec<Mapping>
     }
+
     impl ::std::default::Default for MyConfig {
         fn default() -> Self { Self { mappings: vec![] } }
         
@@ -18,7 +22,7 @@ pub mod provider {
 
     use serde::{Serialize, Deserialize};
 
-    #[derive(Serialize, Deserialize, Debug)]
+    #[derive(Serialize, Deserialize, Debug, Clone)]
     pub struct Mapping {
         pub host: String,
         pub target: String,
@@ -36,60 +40,114 @@ pub mod provider {
 }
 
 pub mod http {
-
-
-    use std::task::{Poll, Context};
-
-    use axum::{
-        body::Body,
-
-        extract::State,
-        http::uri::Uri,
-        response::{IntoResponse, Response},
-        routing::get,
-        Router,
-    };
-    use axum::routing::MethodRouter;
-    use hyper::Request;
-    use crate::{provider::Mapping, config::{MyConfig}};
-    use tower::{ServiceBuilder, Layer, Service};
-    
-
+    use httproxide_hyper_reverse_proxy::ReverseProxy;
+    use hyper::body::HttpBody;
     use hyper::client::HttpConnector;
+    use hyper::server::conn::AddrStream;
+    use hyper::service::{make_service_fn, service_fn};
+    use hyper::{Body, Request, Response, Server, StatusCode, client, Client};
+    use hyper_rustls::{HttpsConnectorBuilder, HttpsConnector};
+    use hyper_trust_dns::{TrustDnsResolver, RustlsHttpsConnector};
+    use native_tls::{TlsConnectorBuilder, TlsConnector};
+    use rustls::client::ServerCertVerified;
+    use rustls::{ConfigBuilder, ClientConfig, RootCertStore};
+    
+    use std::net::IpAddr;
+    use std::sync::Arc;
+    use std::time::SystemTime;
+    use std::{convert::Infallible, net::SocketAddr};
+    
+    use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 
-    type Client = hyper::client::Client<HttpConnector, Body>;
 
+    
+    use crate::config::MyConfig;
+    use crate::provider::Mapping;
 
-    use futures_util::future::BoxFuture;
+    
 
+    lazy_static::lazy_static! {
+        static ref PROXY_CLIENT: ReverseProxy<HttpsConnector<HttpConnector>, Body> = {
 
-    pub async fn start_server(port: u16, mappings: Vec<Mapping>, verbose: bool)
-    {
+            let mut config = ClientConfig::builder()
+                .with_safe_defaults()
+                .with_root_certificates(RootCertStore::empty())
+                .with_no_client_auth();
+                
+            config.dangerous()
+                .set_certificate_verifier(Arc::new(NoCertificateVerification {}));
 
-        let app = Router::new()
-            .merge(proxy_pac_router())
-            .layer(ServiceBuilder::new().layer(ProxyLayer).layer(LoggingLayer));
+            let https = hyper_rustls::HttpsConnectorBuilder::new()
+                .with_tls_config(config)
+                .https_only()
+                .enable_http1()
+                .build();
 
-        // run it with hyper on localhost:3000
-        axum::Server::bind(&format!("0.0.0.0:{}", port).parse().unwrap())
-            .serve(app.into_make_service())
-            .await
-            .unwrap();
+            let hyper_client = hyper::Client::builder().build::<_, hyper::Body>(https);
+            
+            return ReverseProxy::new(hyper_client);
+        };
     }
 
+    fn debug_request(req: Request<Body>) -> Result<Response<Body>, Infallible>  {
+        let body_str = format!("{:?}", req);
+        Ok(Response::new(Body::from(body_str)))
+    }
+    
+    
+    async fn handle(client_ip: IpAddr, req: Request<Body>) -> Result<Response<Body>, Infallible> {
+        println!("URI {}", req.uri().to_string());
 
-    fn proxy_pac_router() -> Router {
-        async fn handler() -> &'static str {
-            Box::leak(create_pac_file(vec![]).into_boxed_str())
+        let config: MyConfig = confy::load("symfony-dev-proxy", None).unwrap_or(MyConfig::default());
+
+        for mapping in &config.mappings {
+            if let Some(host) = req.headers().get("host") {
+                if host.eq(mapping.host.as_str()) {
+                    println!("* Proxy request");
+
+                    return match PROXY_CLIENT.call(client_ip, &mapping.target, req).await {
+                        Ok(response) => {Ok(response)}
+                        Err(_error) => {Ok(Response::builder()
+                                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                            .body(Body::from(format!("{:?}", _error)))
+                                            .unwrap())}
+                    };
+                }
+            }
         }
-    
-        route("/proxy.pac", get(handler))
+        if req.uri().path().starts_with("/proxy.pac") {    
+            return Ok(Response::new(Body::from(create_pac_file(config.mappings))));
+        }
+
+        let response = Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Body::empty())
+            .unwrap();
+
+        return Ok(response)
+
     }
 
-    fn route(path: &str, method_router: MethodRouter<()>) -> Router {
-        Router::new().route(path, method_router)
+    pub async fn start_server(port: u16, verbose: bool) 
+    {
+        let bind_addr = format!("127.0.0.1:{}", port);
+        let addr: SocketAddr = bind_addr.parse().expect("Could not parse ip:port.");
+
+        let make_svc = make_service_fn(move |conn: &AddrStream| {
+            ;
+            let remote_addr = conn.remote_addr().ip();
+            async move { Ok::<_, Infallible>(service_fn(move |req| handle(remote_addr, req))) }
+        });
+
+        let server = Server::bind(&addr).serve(make_svc);
+
+        println!("Running server on {:?}", addr);
+
+        if let Err(e) = server.await {
+            eprintln!("server error: {}", e);
+        }
     }
-    
+
     fn create_pac_file(mappings: Vec<Mapping>) -> String {
         let host_mappings = mappings.iter().map(|m| m.host.clone()).collect::<Vec<String>>();
         return format!(r###"
@@ -106,118 +164,20 @@ return 'DIRECT';
     }
 
 
-    #[derive(Clone)]
-    struct LoggingLayer;
-
-    impl<S> Layer<S> for LoggingLayer {
-        type Service = LoggingMiddleware<S>;
-
-        fn layer(&self, inner: S) -> Self::Service {
-            LoggingMiddleware { inner }
+    struct NoCertificateVerification {}
+    impl rustls::client::ServerCertVerifier for NoCertificateVerification {
+        fn verify_server_cert(
+            &self,
+            end_entity: &rustls::Certificate,
+            intermediates: &[rustls::Certificate],
+            server_name: &rustls::ServerName,
+            scts: &mut dyn Iterator<Item = &[u8]>,
+            ocsp_response: &[u8],
+            now: SystemTime
+        ) -> Result<rustls::client::ServerCertVerified, rustls::Error>
+        {
+            return Ok(ServerCertVerified::assertion());
         }
     }
-
-    #[derive(Clone)]
-    struct LoggingMiddleware<S> {
-        inner: S,
-    }
-
-    impl<S> Service<Request<Body>> for LoggingMiddleware<S>
-    where
-        S: Service<Request<Body>, Response = axum::response::Response> + Send + 'static,
-        S::Future: Send + 'static,
-    {
-        type Response = S::Response;
-        type Error = S::Error;
-        // `BoxFuture` is a type alias for `Pin<Box<dyn Future + Send + 'a>>`
-        type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
-
-        fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-            self.inner.poll_ready(cx)
-        }
-
-        fn call(&mut self, request: Request<Body>) -> Self::Future {
-            println!("{}", "request");
-            let future = self.inner.call(request);
-            Box::pin(async move {
-                let response: axum::response::Response = future.await?;
-                Ok(response)
-            })
-        }
-    }
-
-
-    #[derive(Clone)]
-    struct ProxyLayer;
-
-    impl<S> Layer<S> for ProxyLayer {
-        type Service = ProxyMiddleware<S>;
-
-        fn layer(&self, inner: S) -> Self::Service {
-            ProxyMiddleware { inner }
-        }
-    }
-
-    #[derive(Clone)]
-    struct ProxyMiddleware<S> {
-        inner: S,
-    }
-
-    impl<S> Service<Request<Body>> for ProxyMiddleware<S>
-    where
-        S: Service<Request<Body>, Response = axum::response::Response> + Send + 'static,
-        S::Future: Send + 'static,
-    {
-        type Response = S::Response;
-        type Error = S::Error;
-        // `BoxFuture` is a type alias for `Pin<Box<dyn Future + Send + 'a>>`
-        type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
-
-        fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-            self.inner.poll_ready(cx)
-        }
-
-        fn call(&mut self, mut request: Request<Body>) -> Self::Future {
-            let config: MyConfig = confy::load("symfony-dev-proxy", None).unwrap_or(MyConfig::default());
-        
-            let headers = request.headers();
-            if let Some(host) = headers.get("Host") {
-                let host_value = &host.to_str().unwrap_or("").to_string();
-                let host_mapping = config.mappings.iter().find(|m| &m.host == host_value);
-
-                if let Some(mapping) = host_mapping {
-                    println!("Request {} to {}", mapping.host, mapping.target);
-                    
-                    let client: Client = hyper::Client::builder().build(HttpConnector::new());
-
-                    let path = request.uri().path();
-                    let path_query = request
-                        .uri()
-                        .path_and_query()
-                        .map(|v| v.as_str())
-                        .unwrap_or(path);
-
-                    let uri = format!("{}{}", mapping.target, path_query);
-
-                    *request.uri_mut() = Uri::try_from(uri).unwrap();
-
-
-                    return Box::pin(async move {
-                        let proxy_response = client.request(request).await;
-
-                        let response: axum::response::Response = proxy_response.unwrap().into_response();
-                        Ok(response)
-                    });                    
-                }
-            }
-
-            let future = self.inner.call(request);
-            Box::pin(async move {
-                let response: axum::response::Response = future.await?;
-                Ok(response)
-            })
-        }
-    }
-
 
 }

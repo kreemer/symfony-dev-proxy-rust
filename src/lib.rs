@@ -1,7 +1,3 @@
-
-#[macro_use]
-extern crate tracing;
-
 pub mod config {
     use serde::{Serialize, Deserialize};
 
@@ -41,26 +37,19 @@ pub mod provider {
 
 pub mod http {
     use httproxide_hyper_reverse_proxy::ReverseProxy;
-    use hyper::body::HttpBody;
     use hyper::client::HttpConnector;
     use hyper::server::conn::AddrStream;
     use hyper::service::{make_service_fn, service_fn};
-    use hyper::{Body, Request, Response, Server, StatusCode, client, Client};
-    use hyper_rustls::{HttpsConnectorBuilder, HttpsConnector};
-    use hyper_trust_dns::{TrustDnsResolver, RustlsHttpsConnector};
-    use native_tls::{TlsConnectorBuilder, TlsConnector};
+    use hyper::{Body, Request, Response, Server, StatusCode};
+    use hyper_rustls::{HttpsConnector};
     use rustls::client::ServerCertVerified;
-    use rustls::{ConfigBuilder, ClientConfig, RootCertStore};
+    use rustls::{ClientConfig, RootCertStore};
     
     use std::net::IpAddr;
     use std::sync::Arc;
     use std::time::SystemTime;
     use std::{convert::Infallible, net::SocketAddr};
-    
-    use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 
-
-    
     use crate::config::MyConfig;
     use crate::provider::Mapping;
 
@@ -88,12 +77,6 @@ pub mod http {
             return ReverseProxy::new(hyper_client);
         };
     }
-
-    fn debug_request(req: Request<Body>) -> Result<Response<Body>, Infallible>  {
-        let body_str = format!("{:?}", req);
-        Ok(Response::new(Body::from(body_str)))
-    }
-    
     
     async fn handle(client_ip: IpAddr, req: Request<Body>) -> Result<Response<Body>, Infallible> {
         println!("URI {}", req.uri().to_string());
@@ -128,13 +111,12 @@ pub mod http {
 
     }
 
-    pub async fn start_server(port: u16, verbose: bool) 
+    pub async fn start_server(port: u16, _verbose: bool) 
     {
         let bind_addr = format!("127.0.0.1:{}", port);
         let addr: SocketAddr = bind_addr.parse().expect("Could not parse ip:port.");
 
         let make_svc = make_service_fn(move |conn: &AddrStream| {
-            ;
             let remote_addr = conn.remote_addr().ip();
             async move { Ok::<_, Infallible>(service_fn(move |req| handle(remote_addr, req))) }
         });
@@ -168,12 +150,12 @@ return 'DIRECT';
     impl rustls::client::ServerCertVerifier for NoCertificateVerification {
         fn verify_server_cert(
             &self,
-            end_entity: &rustls::Certificate,
-            intermediates: &[rustls::Certificate],
-            server_name: &rustls::ServerName,
-            scts: &mut dyn Iterator<Item = &[u8]>,
-            ocsp_response: &[u8],
-            now: SystemTime
+            _end_entity: &rustls::Certificate,
+            _intermediates: &[rustls::Certificate],
+            _server_name: &rustls::ServerName,
+            _scts: &mut dyn Iterator<Item = &[u8]>,
+            _ocsp_response: &[u8],
+            _now: SystemTime
         ) -> Result<rustls::client::ServerCertVerified, rustls::Error>
         {
             return Ok(ServerCertVerified::assertion());

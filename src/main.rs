@@ -1,12 +1,11 @@
 use clap::{command, Parser, Subcommand};
-use symfony_dev_proxy::{config::MyConfig, provider::Mapping, http::start_server};
+use symfony_dev_proxy::{config::MyConfig, http::start_server, provider::Mapping};
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-
     #[arg(short, long)]
     verbose: bool,
 
@@ -16,28 +15,18 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    Run {
-        port: Option<u16>,
-    },
-    Add {
-        host: String,
-        target: String,
-    },
-    Remove {
-        host: String,
-    },
+    Run { port: Option<u16> },
+    Add { host: String, target: String },
+    Remove { host: String },
     List {},
 }
 
-
-
 #[tokio::main]
 async fn main() -> Result<()> {
-
     let cli = Cli::parse();
-    let mut config: MyConfig = confy::load("symfony-dev-proxy", None).unwrap_or(MyConfig::default());
+    let mut config: MyConfig =
+        confy::load("symfony-dev-proxy", None).unwrap_or(MyConfig::default());
 
-    
     match &cli.command {
         Some(Commands::Run { port }) => {
             let configured_port: u16 = port.unwrap_or_else(|| 7040);
@@ -51,17 +40,21 @@ async fn main() -> Result<()> {
             if cli.verbose {
                 println!("Adding new mapping {} --> {}", host, target);
             }
-            
+
             let mapping = Mapping::new(host.clone(), target.clone());
 
             if config.mappings.contains(&mapping) {
-                let index = config.mappings.iter().position(|m| {m == &mapping}).expect("Found mapping but no position");
+                let index = config
+                    .mappings
+                    .iter()
+                    .position(|m| m == &mapping)
+                    .expect("Found mapping but no position");
                 config.mappings.remove(index);
             }
 
             config.mappings.push(mapping);
 
-            let result = confy::store("symfony-dev-proxy",None, &config);
+            let result = confy::store("symfony-dev-proxy", None, &config);
             if result.is_err() {
                 return Err(anyhow!("Could not save mapping"));
             }
@@ -72,31 +65,28 @@ async fn main() -> Result<()> {
                 println!("Remove mapping {}", host);
             }
 
-            let index = config.mappings.iter().position(|m| {&m.host == host});
+            let index = config.mappings.iter().position(|m| &m.host == host);
 
             if let Some(i) = index {
                 config.mappings.remove(i);
-                let result = confy::store("symfony-dev-proxy",None, &config);
+                let result = confy::store("symfony-dev-proxy", None, &config);
                 if result.is_err() {
                     return Err(anyhow!("Could not save mapping"));
                 }
-
             } else {
                 return Err(anyhow!("Did not find mapping with host {}", host));
             }
         }
-        Some(Commands::List {  }) => {
+        Some(Commands::List {}) => {
             if config.mappings.is_empty() {
                 println!("No mapping present");
                 return Ok(());
             }
             for entry in config.mappings {
-                println!("{} --> {}", entry.host, entry.target); 
-            } 
+                println!("{} --> {}", entry.host, entry.target);
+            }
         }
-        None => {
-            
-        }
+        None => {}
     }
 
     Ok(())

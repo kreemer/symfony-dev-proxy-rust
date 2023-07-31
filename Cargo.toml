@@ -11,10 +11,11 @@ clap = { version = "4.3", features = ["derive"] }
 confy = "0.5.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.96"
-hyper = { version = "0.14.18", features = ["full"] }
+hyper = { version = "1.0.0-rc.4", features = ["full"] }
 tokio = { version = "1.17.0", features = ["full"] }
 lazy_static = "1.4.0"
-hyper-tls = "0.5.0"
-hyper-rustls = {version = "0.23.2", features = ["webpki-roots"]}
-rustls = { version = "0.20.8", features = [ "dangerous_configuration"]}
-httproxide-hyper-reverse-proxy = "0.5.2-dev"
+bytes = "1"
+http-body-util = { version = "=0.1.0-rc.3" }
+pin-project-lite = "0.2.4"
+futures-channel = "0.3"
+futures-util = { version = "0.3", default-features = false }

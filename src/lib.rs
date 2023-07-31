@@ -90,15 +90,23 @@ pub mod http {
         let host_mappings = mappings
             .iter()
             .map(|m| m.host.clone())
+            .map(|m| {
+                if m.ends_with(":443") {
+                    return format!("https://{}", m.strip_suffix(":443").expect("fail")).to_string();
+                } else if m.ends_with(":80") {
+                    return format!("http://{}", m.strip_suffix(":80").expect("fail")).to_string();
+                }
+                return format!("https://{}", m).to_string();
+            })
             .collect::<Vec<String>>();
         format!(
             r###"
 function FindProxyForURL (url, host) {{ 
 let list = {};
 for (let i = 0; i < list.length; i++) {{ 
-if (host == list[i]) {{ 
-    return 'PROXY localhost:7040';
-}}
+    if (host == list[i]) {{ 
+        return 'PROXY localhost:7040';
+    }}
 }}                  
 return 'DIRECT';
 }}"###,
@@ -111,16 +119,15 @@ return 'DIRECT';
         verbose: bool
     ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
 
-        println!("Verbose: {}", verbose);
+        if verbose { println!("Processing request of {}", req.uri().to_string()); }
 
-        let config: MyConfig =
-        confy::load("symfony-dev-proxy", None).unwrap_or(MyConfig::default());
+        let config: MyConfig = confy::load("symfony-dev-proxy", None)
+            .unwrap_or(MyConfig::default());
 
+        if verbose { println!("Request method is {}", req.method().to_string()); }
         if Method::CONNECT == req.method() {
-            
             for mapping in config.mappings {
                 if let Some(addr) = host_addr(req.uri()) {
-
                     if (mapping.host.eq(&addr)) {
                         tokio::task::spawn(async move {
                             match hyper::upgrade::on(req).await {
